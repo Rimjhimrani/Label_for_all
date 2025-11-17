@@ -29,13 +29,6 @@ desc_style = ParagraphStyle(
 )
 
 # --- Formatting Functions (Unchanged) ---
-def format_part_no_v1(part_no):
-    if not part_no or not isinstance(part_no, str): part_no = str(part_no)
-    if len(part_no) > 5:
-        part1, part2 = part_no[:-5], part_no[-5:]
-        return Paragraph(f"<b><font size=17>{part1}</font><font size=22>{part2}</font></b>", bold_style_v1)
-    return Paragraph(f"<b><font size=17>{part_no}</font></b>", bold_style_v1)
-
 def format_part_no_v2(part_no):
     if not part_no or not isinstance(part_no, str): part_no = str(part_no)
     if part_no.upper() == 'EMPTY':
@@ -44,12 +37,6 @@ def format_part_no_v2(part_no):
         part1, part2 = part_no[:-5], part_no[-5:]
         return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b><br/><br/>", bold_style_v2)
     return Paragraph(f"<b><font size=34>{part_no}</font></b><br/><br/>", bold_style_v2)
-
-def format_description_v1(desc):
-    if not desc or not isinstance(desc, str): desc = str(desc)
-    font_size = 15 if len(desc) <= 30 else 13 if len(desc) <= 50 else 11 if len(desc) <= 70 else 10 if len(desc) <= 90 else 9
-    desc_style_v1 = ParagraphStyle(name='Description_v1', fontName='Helvetica', fontSize=font_size, alignment=TA_LEFT, leading=font_size + 2)
-    return Paragraph(desc, desc_style_v1)
 
 def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
@@ -76,7 +63,6 @@ def parse_dimensions(dim_str):
     return (nums[0], nums[1]) if len(nums) >= 2 else (0, 0)
 
 def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text=None):
-    # This function remains the same, as its logic for physical placement is correct.
     part_no_col, desc_col, model_col, station_col, container_col = find_required_columns(df)
     if not all([part_no_col, container_col, station_col]):
         st.error("❌ 'Part Number', 'Container Type', or 'Station No' column not found.")
@@ -103,7 +89,7 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
         
         for level in sorted(config.get('levels', [])):
             for i in range(config.get('cells_per_level', 0)):
-                location = {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd}
+                location = {'Level': level, 'Physical_Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd}
                 available_cells.append(location)
     
     current_cell_index = 0
@@ -154,54 +140,52 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
 
 def assign_sequential_location_ids(df):
     """
-    NEW FUNCTION: Takes the physically assigned data and gives each part a
-    unique sequential ID that resets for each level.
+    Gives each part a unique sequential ID that resets for each rack AND level.
+    The ID is just the number (e.g., 1, 2, 3).
     """
-    df_sorted = df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']).copy()
-    
-    # Filter out empty parts to only give IDs to real items
+    df_sorted = df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Physical_Cell']).copy()
     df_parts_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
     
-    # This dictionary will hold the running count for each level, e.g., {'A': 1, 'B': 1}
-    level_counters = {}
+    # Counter key will be a tuple: ((Rack1, Rack2), Level)
+    location_counters = {}
     
     sequential_ids = []
     for index, row in df_parts_only.iterrows():
+        # Create a unique key for each rack/level combination
+        rack_id = (row['Rack No 1st'], row['Rack No 2nd'])
         level = row['Level']
+        counter_key = (rack_id, level)
         
-        # If we see a new level for the first time, start its counter at 1
-        if level not in level_counters:
-            level_counters[level] = 1
+        if counter_key not in location_counters:
+            location_counters[counter_key] = 1
         
-        # Get the current counter and create the ID
-        current_id_num = level_counters[level]
-        sequential_ids.append(f"{level}{current_id_num}")
+        current_id_num = location_counters[counter_key]
+        sequential_ids.append(current_id_num)
         
-        # Increment the counter for the next part on this level
-        level_counters[level] += 1
+        location_counters[counter_key] += 1
         
-    df_parts_only['Sequential_ID'] = sequential_ids
+    df_parts_only['Cell'] = sequential_ids
     
-    # Add the empty parts back in, they won't have a sequential ID
     df_empty_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() == 'EMPTY'].copy()
-    
+    # For empty parts, the 'Cell' will be the physical cell number
+    df_empty_only['Cell'] = df_empty_only['Physical_Cell']
+
     return pd.concat([df_parts_only, df_empty_only], ignore_index=True)
 
 
 def extract_location_values(row):
-    """MODIFIED: This now extracts the new sequential ID for the label."""
-    # Use the new Sequential_ID if it exists, otherwise use the old Cell number (for EMPTY labels)
-    cell_value = row.get('Sequential_ID', row.get('Cell', ''))
-    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level']] + [str(cell_value)]
+    """Extracts values for the label, using the final 'Cell' number."""
+    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
 
-# --- PDF Generation Functions (Modified to remove grouping) ---
-def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
+# --- PDF Generation Functions ---
+def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
     elements = []
     
-    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Sequential_ID'], inplace=True, na_position='last')
+    # Sort by the final location to ensure PDF prints in a logical order
+    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True, na_position='last')
     
     df_parts_only = df[df['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
 
@@ -267,7 +251,8 @@ def main():
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Global Rack Configuration")
                 
-                cell_dim_input = st.sidebar.text_input("Cell Dimensions (for sorting)", placeholder="e.g., 800x400")
+                # Clarified the help text for the user
+                st.sidebar.text_input("Cell Dimensions (for sorting only)", placeholder="e.g., 800x400")
                 levels = st.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
                 num_cells_per_level = st.sidebar.number_input("Number of Physical Cells per Level", min_value=1, value=10, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
@@ -290,17 +275,17 @@ def main():
                         for i in range(num_racks):
                             rack_name = f"Rack {i+1:02d}"
                             rack_configs[rack_name] = {
-                                'cell_dimensions': cell_dim_input, 'levels': levels, 'cells_per_level': num_cells_per_level
+                                'levels': levels, 'cells_per_level': num_cells_per_level
                             }
 
                         # Step 1: Assign parts to physical cells
                         df_physically_assigned = automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text)
                         
-                        # Step 2: Give each part its own sequential location ID
+                        # Step 2: Give each part its own final sequential label ID
                         df_final_labels = assign_sequential_location_ids(df_physically_assigned)
                         
                         if df_final_labels is not None and not df_final_labels.empty:
-                            pdf_buffer, label_summary = generate_labels_from_excel_v2(df_final_labels, progress_bar, status_text)
+                            pdf_buffer, label_summary = generate_labels_from_excel(df_final_labels, progress_bar, status_text)
                             
                             if pdf_buffer:
                                 total_labels_generated = sum(label_summary.values())
