@@ -55,7 +55,7 @@ def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
     return Paragraph(desc, desc_style)
 
-# --- Core Logic Functions (Updated) ---
+# --- Core Logic Functions (Corrected and Rewritten) ---
 def find_required_columns(df):
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
@@ -75,130 +75,82 @@ def parse_dimensions(dim_str):
     nums = [int(n) for n in re.findall(r'\d+', dim_str)]
     return (nums[0], nums[1]) if len(nums) >= 2 else (0, 0)
 
-def can_place(cell, w, d):
-    """Finds a valid (x, y) position for a new box of size (w, d) in a cell."""
-    for node in cell['nodes']:
-        x, y = node['x'], node['y']
-        if x + w > cell['width'] or y + d > cell['depth']:
-            continue
-        
-        is_valid_spot = True
-        for placed_box in cell['placed_boxes']:
-            # Check for overlap
-            if not (x + w <= placed_box['x'] or x >= placed_box['x'] + placed_box['w'] or \
-                    y + d <= placed_box['y'] or y >= placed_box['y'] + placed_box['d']):
-                is_valid_spot = False
-                break
-        if is_valid_spot:
-            return {'x': x, 'y': y}
-    return None
-
-def add_part_to_cell(cell, part, x, y, w, d):
-    """Adds a part to a cell and updates the placement nodes."""
-    cell['parts'].append(part)
-    cell['placed_boxes'].append({'x': x, 'y': y, 'w': w, 'd': d})
-    
-    # Remove the node that was just used
-    cell['nodes'] = [n for n in cell['nodes'] if not (n['x'] == x and n['y'] == y)]
-    
-    # Add two new potential nodes
-    new_nodes = [{'x': x + w, 'y': y}, {'x': x, 'y': y + d}]
-    for new_node in new_nodes:
-        # Only add if it's within bounds and not already a corner of another box
-        is_redundant = False
-        if new_node['x'] >= cell['width'] or new_node['y'] >= cell['depth']:
-            continue
-        for existing_node in cell['nodes']:
-            if existing_node['x'] == new_node['x'] and existing_node['y'] == new_node['y']:
-                is_redundant = True
-                break
-        if not is_redundant:
-            cell['nodes'].append(new_node)
-    
-    # Sort nodes to prioritize top-left placement
-    cell['nodes'].sort(key=lambda item: (item['y'], item['x']))
-
-def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text=None):
-    """Performs 2D bin packing to assign parts to locations."""
+def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text=None):
     part_no_col, desc_col, model_col, station_col, container_col = find_required_columns(df)
     if not all([part_no_col, container_col, station_col]):
         st.error("❌ 'Part Number', 'Container Type', or 'Station No' column not found.")
         return None
 
     df_processed = df.copy()
-    rename_dict = {'Part No': 'Part No', 'Description': 'Description', 'Bus Model': 'Bus Model', 'Station No': 'Station No', 'Container': 'Container'}
-    df_processed.rename(columns={find_required_columns(df)[i]: v for i, v in enumerate(rename_dict.values())}, inplace=True)
+    rename_dict = {
+        part_no_col: 'Part No', desc_col: 'Description',
+        model_col: 'Bus Model', station_col: 'Station No', container_col: 'Container'
+    }
+    df_processed.rename(columns={k: v for k, v in rename_dict.items() if k}, inplace=True)
     
-    df_processed['bin_width'], df_processed['bin_depth'] = zip(*df_processed['Container'].map(lambda c: parse_dimensions(bin_dimensions_map.get(c, ''))))
-    df_processed['bin_area'] = df_processed['bin_width'] * df_processed['bin_depth']
-    df_processed.sort_values(by=['Station No', 'bin_area'], ascending=[True, False], inplace=True)
-
+    # Add bin info (dims, area, and user-defined capacity) to the dataframe
+    df_processed['bin_info'] = df_processed['Container'].map(bin_info_map)
+    df_processed['bin_area'] = df_processed['bin_info'].apply(lambda x: x['dims'][0] * x['dims'][1] if x and x['dims'] else 0)
+    df_processed['bins_per_cell'] = df_processed['bin_info'].apply(lambda x: x['capacity'] if x else 0)
+    
     final_df_parts = []
     
-    for station_no, station_group in df_processed.groupby('Station No', sort=False):
+    # Process each station independently
+    for station_no, station_group in df_processed.groupby('Station No', sort=True):
         if status_text: status_text.text(f"Processing station: {station_no}...")
         
         available_cells = []
         for rack_name, config in sorted(rack_configs.items()):
             rack_num_val = ''.join(filter(str.isdigit, rack_name))
-            rack_num_1st, rack_num_2nd = (rack_num_val[0], rack_num_val[1]) if len(rack_num_val) > 1 else ('0', rack_num_val[0])
-            
-            cell_width, cell_depth = parse_dimensions(config.get('cell_dimensions', ''))
+            rack_num_1st = rack_num_val[0] if len(rack_num_val) > 1 else '0'
+            rack_num_2nd = rack_num_val[1] if len(rack_num_val) > 1 else rack_num_val[0]
             
             for level in sorted(config.get('levels', [])):
                 for i in range(config.get('cells_per_level', 0)):
-                    cell = {
-                        'location': {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd},
-                        'width': cell_width, 'depth': cell_depth,
-                        'parts': [], 'placed_boxes': [], 'nodes': [{'x': 0, 'y': 0}]
-                    }
-                    available_cells.append(cell)
-
-        parts_to_assign = station_group.to_dict('records')
-        unassigned_parts = []
+                    location = {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd}
+                    available_cells.append(location)
         
-        for part in parts_to_assign:
-            bin_w, bin_d = part['bin_width'], part['bin_depth']
-            if bin_w == 0 or bin_d == 0:
-                unassigned_parts.append(part)
+        current_cell_index = 0
+        
+        # Group parts by container type and sort groups by largest bin area first
+        parts_grouped_by_container = station_group.groupby('Container')
+        sorted_groups = sorted(parts_grouped_by_container, key=lambda x: x[1]['bin_area'].iloc[0], reverse=True)
+
+        for container_type, group_df in sorted_groups:
+            parts_to_assign = group_df.to_dict('records')
+            # Get the user-defined capacity for this bin type
+            bins_per_cell = parts_to_assign[0]['bins_per_cell']
+
+            if bins_per_cell == 0:
+                st.warning(f"⚠️ Capacity for bin '{container_type}' is 0. Skipping {len(parts_to_assign)} parts.")
                 continue
 
-            part_placed = False
-            for cell in available_cells:
-                # Try original orientation
-                pos = can_place(cell, bin_w, bin_d)
-                if pos:
-                    add_part_to_cell(cell, part, pos['x'], pos['y'], bin_w, bin_d)
-                    part_placed = True
+            # Assign parts in chunks based on the user-defined capacity
+            for i in range(0, len(parts_to_assign), bins_per_cell):
+                if current_cell_index >= len(available_cells):
+                    unplaced_count = len(parts_to_assign) - i
+                    st.error(f"❌ Ran out of rack space at station {station_no}. Could not place {unplaced_count} parts of type '{container_type}'.")
                     break
                 
-                # Try rotated orientation
-                pos = can_place(cell, bin_d, bin_w)
-                if pos:
-                    add_part_to_cell(cell, part, pos['x'], pos['y'], bin_d, bin_w)
-                    part_placed = True
-                    break
+                chunk = parts_to_assign[i:i + bins_per_cell]
+                current_location = available_cells[current_cell_index]
+                
+                for part in chunk:
+                    part.update(current_location)
+                    final_df_parts.append(part)
+                
+                current_cell_index += 1 # Move to the next physical cell
             
-            if not part_placed:
-                unassigned_parts.append(part)
-
-        if unassigned_parts:
-            st.warning(f"⚠️ For station {station_no}, could not assign locations for {len(unassigned_parts)} parts due to insufficient capacity.")
-
-        # Deconstruct the packed cells into the final flat DataFrame
-        for cell in available_cells:
-            if cell['parts']:
-                for part_record in cell['parts']:
-                    # Augment original part data with the final location
-                    part_record.update(cell['location'])
-                    final_df_parts.append(part_record)
-            else:
-                empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': station_no, 'Container': ''}
-                empty_part.update(cell['location'])
-                final_df_parts.append(empty_part)
+            if current_cell_index >= len(available_cells):
+                break # Stop processing this station if we run out of space
+        
+        # Fill any remaining, completely unused cells with 'EMPTY'
+        for i in range(current_cell_index, len(available_cells)):
+            empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': station_no, 'Container': ''}
+            empty_part.update(available_cells[i])
+            final_df_parts.append(empty_part)
 
     return pd.DataFrame(final_df_parts) if final_df_parts else pd.DataFrame()
-
 
 def create_location_key(row):
     return '_'.join([str(row.get(c, '')) for c in ['Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']])
@@ -214,7 +166,6 @@ def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
     
     df['location_key'] = df.apply(create_location_key, axis=1)
     df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True)
-    # Group by the unique location key to generate one label per packed cell
     df_grouped = df.groupby('location_key')
     total_locations = len(df_grouped)
     label_count = 0
@@ -234,7 +185,6 @@ def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
 
         if label_count > 0 and label_count % 4 == 0: elements.append(PageBreak())
         
-        # In this format, we show the first two parts placed in the location
         part2 = group.iloc[1] if len(group) > 1 else part1
         
         part_table1 = Table([['Part No', format_part_no_v1(str(part1['Part No']))], ['Description', format_description_v1(str(part1['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
@@ -318,8 +268,7 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-
-# --- Main Application UI (Unchanged) ---
+# --- Main Application UI (Updated with new input) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
@@ -342,18 +291,20 @@ def main():
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Global Rack Configuration")
                 
-                cell_dim = st.sidebar.text_input("Cell Dimensions (for all racks)", placeholder="e.g., 800x400")
-                levels = st.sidebar.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
-                num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=10, step=1)
+                cell_dim_input = st.sidebar.text_input("Cell Dimensions (for all racks)", placeholder="e.g., 800x400")
+                levels = st.sidebar.multoselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
+                num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=2, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
                 
                 unique_containers = get_unique_containers(df, container_col)
-                bin_dimensions_map = {}
+                bin_info_map = {}
                 st.sidebar.markdown("---")
-                st.sidebar.subheader("Container (Bin) Dimensions")
+                st.sidebar.subheader("Container (Bin) Rules")
                 for container in unique_containers:
-                    dim = st.sidebar.text_input(f"Dimensions for {container}", key=f"bindim_{container}", placeholder="e.g., 600x400")
-                    bin_dimensions_map[container] = dim
+                    st.sidebar.markdown(f"**Settings for {container}**")
+                    dim = st.sidebar.text_input(f"Dimensions", key=f"bindim_{container}", placeholder="e.g., 600x400")
+                    capacity = st.sidebar.number_input("Bins per Cell (Capacity)", min_value=0, value=1, step=1, key=f"bincap_{container}")
+                    bin_info_map[container] = {'dims': parse_dimensions(dim), 'capacity': capacity}
 
                 if st.button("🚀 Generate PDF Labels", type="primary"):
                     progress_bar = st.progress(0)
@@ -363,10 +314,10 @@ def main():
                         for i in range(num_racks):
                             rack_name = f"Rack {i+1:02d}"
                             rack_configs[rack_name] = {
-                                'cell_dimensions': cell_dim, 'levels': levels, 'cells_per_level': num_cells_per_level
+                                'cell_dimensions': cell_dim_input, 'levels': levels, 'cells_per_level': num_cells_per_level
                             }
 
-                        df_processed = automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text)
+                        df_processed = automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text)
                         
                         if df_processed is not None and not df_processed.empty:
                             gen_func = generate_labels_from_excel_v2 if label_type == "Single Part" else generate_labels_from_excel_v1
