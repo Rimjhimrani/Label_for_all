@@ -104,6 +104,7 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
     for station_no, station_group in df_processed.groupby('Station No', sort=False):
         if status_text: status_text.text(f"Processing station: {station_no}...")
         
+        # Create a master list of all available cells based on the global rack configuration
         available_cells = []
         for rack_name, config in sorted(rack_configs.items()):
             rack_num_val = ''.join(filter(str.isdigit, rack_name))
@@ -112,7 +113,8 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
             
             cell_width, cell_depth = parse_dimensions(config.get('cell_dimensions', ''))
             
-            for level, num_cells in sorted(config.get('cells_per_level', {}).items()):
+            for level in sorted(config.get('levels', [])):
+                num_cells = config.get('cells_per_level', 0)
                 for i in range(num_cells):
                     cell = {
                         'location': {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd},
@@ -275,7 +277,7 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI (Updated) ---
+# --- Main Application UI (Updated for Global Config) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
@@ -295,49 +297,38 @@ def main():
             _, _, _, _, container_col = find_required_columns(df)
             
             if container_col:
+                # --- Global Rack & Cell Configuration ---
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("Global Rack Configuration")
+                
+                cell_dim = st.sidebar.text_input("Cell Dimensions (for all racks)", placeholder="e.g., 800x400")
+                levels = st.sidebar.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
+                num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=10, step=1)
+                num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
+                
+                # --- Bin Dimensions Configuration ---
                 unique_containers = get_unique_containers(df, container_col)
                 bin_dimensions_map = {}
-
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Container (Bin) Dimensions")
                 for container in unique_containers:
                     dim = st.sidebar.text_input(f"Dimensions for {container}", key=f"bindim_{container}", placeholder="e.g., 600x400")
                     bin_dimensions_map[container] = dim
-                
-                st.sidebar.markdown("---")
-                st.sidebar.subheader("Rack & Level Configuration")
-                num_racks = st.sidebar.number_input("Number of Racks", min_value=1, value=1, step=1)
-
-                rack_configs = {}
-
-                for i in range(num_racks):
-                    rack_name = f"Rack {i+1:02d}"
-                    with st.sidebar.expander(f"Settings for {rack_name}", expanded=i==0):
-                        cell_dim = st.text_input(f"Cell Dimensions for {rack_name}", key=f"celldim_{rack_name}", placeholder="e.g., 800x400")
-                        levels = st.multiselect(f"Active Levels in {rack_name}", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'], key=f"lvl_{rack_name}")
-                        
-                        cells_per_level = {}
-                        if levels:
-                            num_cells = st.number_input(
-                                f"Number of Cells per Level in {rack_name}", 
-                                min_value=0, 
-                                value=2, 
-                                step=1, 
-                                key=f"numcells_{rack_name}"
-                            )
-                            for level in levels:
-                                cells_per_level[level] = num_cells
-                        
-                        rack_configs[rack_name] = {
-                            'cell_dimensions': cell_dim,
-                            'levels': levels, 
-                            'cells_per_level': cells_per_level
-                        }
 
                 if st.button("🚀 Generate PDF Labels", type="primary"):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     try:
+                        # Build the rack_configs dictionary based on global settings
+                        rack_configs = {}
+                        for i in range(num_racks):
+                            rack_name = f"Rack {i+1:02d}"
+                            rack_configs[rack_name] = {
+                                'cell_dimensions': cell_dim,
+                                'levels': levels,
+                                'cells_per_level': num_cells_per_level
+                            }
+
                         df_processed = automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text)
                         
                         if df_processed is not None and not df_processed.empty:
