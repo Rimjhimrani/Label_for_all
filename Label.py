@@ -55,7 +55,7 @@ def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
     return Paragraph(desc, desc_style)
 
-# --- Core Logic Functions (Unchanged) ---
+# --- Core Logic Functions (Corrected and Rewritten) ---
 def find_required_columns(df):
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
@@ -89,26 +89,31 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
     df_processed.rename(columns={k: v for k, v in rename_dict.items() if k}, inplace=True)
     
     df_processed['bin_info'] = df_processed['Container'].map(bin_info_map)
-    df_processed['bin_area'] = df_processed['bin_info'].apply(lambda x: x['dims'][0] * x['dims'][1] if x and x['dims'] else 0)
+    df_processed['bin_area'] = df_processed['bin_info'].apply(lambda x: x['dims'][0] * x['dims'][1] if x and x.get('dims') else 0)
     df_processed['bins_per_cell'] = df_processed['bin_info'].apply(lambda x: x['capacity'] if x else 0)
     
     final_df_parts = []
     
+    # --- MAJOR FIX: Create a single master list of all cells for all racks ---
+    available_cells = []
+    for rack_name, config in sorted(rack_configs.items()):
+        rack_num_val = ''.join(filter(str.isdigit, rack_name))
+        rack_num_1st = rack_num_val[0] if len(rack_num_val) > 1 else '0'
+        rack_num_2nd = rack_num_val[1] if len(rack_num_val) > 1 else rack_num_val[0]
+        
+        for level in sorted(config.get('levels', [])):
+            for i in range(config.get('cells_per_level', 0)):
+                location = {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd}
+                available_cells.append(location)
+    
+    # --- MAJOR FIX: Use a single index for the master cell list ---
+    current_cell_index = 0
+    last_processed_station = "N/A"
+
+    # Process station by station to keep those parts together
     for station_no, station_group in df_processed.groupby('Station No', sort=True):
         if status_text: status_text.text(f"Processing station: {station_no}...")
-        
-        available_cells = []
-        for rack_name, config in sorted(rack_configs.items()):
-            rack_num_val = ''.join(filter(str.isdigit, rack_name))
-            rack_num_1st = rack_num_val[0] if len(rack_num_val) > 1 else '0'
-            rack_num_2nd = rack_num_val[1] if len(rack_num_val) > 1 else rack_num_val[0]
-            
-            for level in sorted(config.get('levels', [])):
-                for i in range(config.get('cells_per_level', 0)):
-                    location = {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd}
-                    available_cells.append(location)
-        
-        current_cell_index = 0
+        last_processed_station = station_no
         
         parts_grouped_by_container = station_group.groupby('Container')
         sorted_groups = sorted(parts_grouped_by_container, key=lambda x: x[1]['bin_area'].iloc[0], reverse=True)
@@ -124,7 +129,7 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
             for i in range(0, len(parts_to_assign), bins_per_cell):
                 if current_cell_index >= len(available_cells):
                     unplaced_count = len(parts_to_assign) - i
-                    st.error(f"❌ Ran out of rack space at station {station_no}. Could not place {unplaced_count} parts of type '{container_type}'.")
+                    st.error(f"❌ Ran out of rack space. Could not place {unplaced_count} parts of type '{container_type}' for station {station_no}.")
                     break
                 
                 chunk = parts_to_assign[i:i + bins_per_cell]
@@ -134,15 +139,19 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
                     part.update(current_location)
                     final_df_parts.append(part)
                 
-                current_cell_index += 1 
+                current_cell_index += 1
             
             if current_cell_index >= len(available_cells):
-                break 
-        
-        for i in range(current_cell_index, len(available_cells)):
-            empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': station_no, 'Container': ''}
-            empty_part.update(available_cells[i])
-            final_df_parts.append(empty_part)
+                break
+        if current_cell_index >= len(available_cells):
+            st.warning("⚠️ All available rack space has been filled.")
+            break
+            
+    # --- MAJOR FIX: Fill remaining cells after all stations are processed ---
+    for i in range(current_cell_index, len(available_cells)):
+        empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': last_processed_station, 'Container': ''}
+        empty_part.update(available_cells[i])
+        final_df_parts.append(empty_part)
 
     return pd.DataFrame(final_df_parts) if final_df_parts else pd.DataFrame()
 
@@ -262,7 +271,7 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI (Corrected) ---
+# --- Main Application UI (Unchanged) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
@@ -286,7 +295,6 @@ def main():
                 st.sidebar.subheader("Global Rack Configuration")
                 
                 cell_dim_input = st.sidebar.text_input("Cell Dimensions (for all racks)", placeholder="e.g., 800x400")
-                # --- THIS IS THE CORRECTED LINE ---
                 levels = st.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
                 num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=2, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
