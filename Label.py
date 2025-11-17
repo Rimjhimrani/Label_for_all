@@ -1,6 +1,4 @@
-nums[1]) if len(nums) >= 2 else (0, 0)
-
-def automate_locationimport streamlit as st
+import streamlit as st
 import pandas as pd
 import os
 import io
