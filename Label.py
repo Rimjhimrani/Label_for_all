@@ -8,7 +8,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph, PageBreak
 from reportlab.lib.units import cm
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.lib.enums import TA_LEFT
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -17,20 +17,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Style Definitions ---
+# --- Style Definitions (Unchanged) ---
 bold_style_v1 = ParagraphStyle(
     name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=14, spaceBefore=2, spaceAfter=2
 )
-
 bold_style_v2 = ParagraphStyle(
     name='Bold_v2', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=12, spaceBefore=0, spaceAfter=15,
 )
-
 desc_style = ParagraphStyle(
     name='Description', fontName='Helvetica', fontSize=20, alignment=TA_LEFT, leading=16, spaceBefore=2, spaceAfter=2
 )
 
-# --- Formatting Functions ---
+# --- Formatting Functions (Unchanged) ---
 def format_part_no_v1(part_no):
     if not part_no or not isinstance(part_no, str): part_no = str(part_no)
     if len(part_no) > 5:
@@ -57,7 +55,7 @@ def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
     return Paragraph(desc, desc_style)
 
-# --- Advanced Core Logic Functions ---
+# --- Core Logic Functions (Updated) ---
 def find_required_columns(df):
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
@@ -73,27 +71,63 @@ def get_unique_containers(df, container_col):
     return sorted(df[container_col].dropna().astype(str).unique())
 
 def parse_dimensions(dim_str):
-    if not isinstance(dim_str, str) or not dim_str:
-        return 0, 0
+    if not isinstance(dim_str, str) or not dim_str: return 0, 0
     nums = [int(n) for n in re.findall(r'\d+', dim_str)]
-    if len(nums) >= 2:
-        return nums[0], nums[1]
-    elif len(nums) == 1:
-        return nums[0], nums[0]
-    return 0, 0
+    return (nums[0], nums[1]) if len(nums) >= 2 else (0, 0)
+
+def can_place(cell, w, d):
+    """Finds a valid (x, y) position for a new box of size (w, d) in a cell."""
+    for node in cell['nodes']:
+        x, y = node['x'], node['y']
+        if x + w > cell['width'] or y + d > cell['depth']:
+            continue
+        
+        is_valid_spot = True
+        for placed_box in cell['placed_boxes']:
+            # Check for overlap
+            if not (x + w <= placed_box['x'] or x >= placed_box['x'] + placed_box['w'] or \
+                    y + d <= placed_box['y'] or y >= placed_box['y'] + placed_box['d']):
+                is_valid_spot = False
+                break
+        if is_valid_spot:
+            return {'x': x, 'y': y}
+    return None
+
+def add_part_to_cell(cell, part, x, y, w, d):
+    """Adds a part to a cell and updates the placement nodes."""
+    cell['parts'].append(part)
+    cell['placed_boxes'].append({'x': x, 'y': y, 'w': w, 'd': d})
+    
+    # Remove the node that was just used
+    cell['nodes'] = [n for n in cell['nodes'] if not (n['x'] == x and n['y'] == y)]
+    
+    # Add two new potential nodes
+    new_nodes = [{'x': x + w, 'y': y}, {'x': x, 'y': y + d}]
+    for new_node in new_nodes:
+        # Only add if it's within bounds and not already a corner of another box
+        is_redundant = False
+        if new_node['x'] >= cell['width'] or new_node['y'] >= cell['depth']:
+            continue
+        for existing_node in cell['nodes']:
+            if existing_node['x'] == new_node['x'] and existing_node['y'] == new_node['y']:
+                is_redundant = True
+                break
+        if not is_redundant:
+            cell['nodes'].append(new_node)
+    
+    # Sort nodes to prioritize top-left placement
+    cell['nodes'].sort(key=lambda item: (item['y'], item['x']))
 
 def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text=None):
+    """Performs 2D bin packing to assign parts to locations."""
     part_no_col, desc_col, model_col, station_col, container_col = find_required_columns(df)
     if not all([part_no_col, container_col, station_col]):
         st.error("❌ 'Part Number', 'Container Type', or 'Station No' column not found.")
         return None
 
     df_processed = df.copy()
-    rename_dict = {
-        part_no_col: 'Part No', desc_col: 'Description',
-        model_col: 'Bus Model', station_col: 'Station No', container_col: 'Container'
-    }
-    df_processed.rename(columns={k: v for k, v in rename_dict.items() if k}, inplace=True)
+    rename_dict = {'Part No': 'Part No', 'Description': 'Description', 'Bus Model': 'Bus Model', 'Station No': 'Station No', 'Container': 'Container'}
+    df_processed.rename(columns={find_required_columns(df)[i]: v for i, v in enumerate(rename_dict.values())}, inplace=True)
     
     df_processed['bin_width'], df_processed['bin_depth'] = zip(*df_processed['Container'].map(lambda c: parse_dimensions(bin_dimensions_map.get(c, ''))))
     df_processed['bin_area'] = df_processed['bin_width'] * df_processed['bin_depth']
@@ -104,42 +138,44 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
     for station_no, station_group in df_processed.groupby('Station No', sort=False):
         if status_text: status_text.text(f"Processing station: {station_no}...")
         
-        # Create a master list of all available cells based on the global rack configuration
         available_cells = []
         for rack_name, config in sorted(rack_configs.items()):
             rack_num_val = ''.join(filter(str.isdigit, rack_name))
-            rack_num_1st = rack_num_val[0] if len(rack_num_val) > 1 else '0'
-            rack_num_2nd = rack_num_val[1] if len(rack_num_val) > 1 else rack_num_val[0]
+            rack_num_1st, rack_num_2nd = (rack_num_val[0], rack_num_val[1]) if len(rack_num_val) > 1 else ('0', rack_num_val[0])
             
             cell_width, cell_depth = parse_dimensions(config.get('cell_dimensions', ''))
             
             for level in sorted(config.get('levels', [])):
-                num_cells = config.get('cells_per_level', 0)
-                for i in range(num_cells):
+                for i in range(config.get('cells_per_level', 0)):
                     cell = {
                         'location': {'Level': level, 'Cell': f"{i + 1:02d}", 'Rack': base_rack_id, 'Rack No 1st': rack_num_1st, 'Rack No 2nd': rack_num_2nd},
-                        'cell_width': cell_width, 'cell_depth': cell_depth,
-                        'occupied_width': 0, 'parts': []
+                        'width': cell_width, 'depth': cell_depth,
+                        'parts': [], 'placed_boxes': [], 'nodes': [{'x': 0, 'y': 0}]
                     }
                     available_cells.append(cell)
 
         parts_to_assign = station_group.to_dict('records')
         unassigned_parts = []
-
+        
         for part in parts_to_assign:
-            part_placed = False
             bin_w, bin_d = part['bin_width'], part['bin_depth']
-            
             if bin_w == 0 or bin_d == 0:
                 unassigned_parts.append(part)
                 continue
 
+            part_placed = False
             for cell in available_cells:
-                if bin_d <= cell['cell_depth'] and (cell['occupied_width'] + bin_w) <= cell['cell_width']:
-                    part.update(cell['location'])
-                    final_df_parts.append(part)
-                    cell['occupied_width'] += bin_w
-                    cell['parts'].append(part['Part No'])
+                # Try original orientation
+                pos = can_place(cell, bin_w, bin_d)
+                if pos:
+                    add_part_to_cell(cell, part, pos['x'], pos['y'], bin_w, bin_d)
+                    part_placed = True
+                    break
+                
+                # Try rotated orientation
+                pos = can_place(cell, bin_d, bin_w)
+                if pos:
+                    add_part_to_cell(cell, part, pos['x'], pos['y'], bin_d, bin_w)
                     part_placed = True
                     break
             
@@ -147,18 +183,21 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
                 unassigned_parts.append(part)
 
         if unassigned_parts:
-            st.warning(f"⚠️ For station {station_no}, could not assign locations for {len(unassigned_parts)} parts due to insufficient capacity or invalid dimensions.")
+            st.warning(f"⚠️ For station {station_no}, could not assign locations for {len(unassigned_parts)} parts due to insufficient capacity.")
 
+        # Deconstruct the packed cells into the final flat DataFrame
         for cell in available_cells:
-            if not cell['parts']:
+            if cell['parts']:
+                for part_record in cell['parts']:
+                    # Augment original part data with the final location
+                    part_record.update(cell['location'])
+                    final_df_parts.append(part_record)
+            else:
                 empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': station_no, 'Container': ''}
                 empty_part.update(cell['location'])
                 final_df_parts.append(empty_part)
 
-    if not final_df_parts:
-        return pd.DataFrame()
-
-    return pd.DataFrame(final_df_parts)
+    return pd.DataFrame(final_df_parts) if final_df_parts else pd.DataFrame()
 
 
 def create_location_key(row):
@@ -175,6 +214,7 @@ def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
     
     df['location_key'] = df.apply(create_location_key, axis=1)
     df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True)
+    # Group by the unique location key to generate one label per packed cell
     df_grouped = df.groupby('location_key')
     total_locations = len(df_grouped)
     label_count = 0
@@ -194,6 +234,7 @@ def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
 
         if label_count > 0 and label_count % 4 == 0: elements.append(PageBreak())
         
+        # In this format, we show the first two parts placed in the location
         part2 = group.iloc[1] if len(group) > 1 else part1
         
         part_table1 = Table([['Part No', format_part_no_v1(str(part1['Part No']))], ['Description', format_description_v1(str(part1['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
@@ -277,7 +318,8 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI (Updated for Global Config) ---
+
+# --- Main Application UI (Unchanged) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
@@ -297,7 +339,6 @@ def main():
             _, _, _, _, container_col = find_required_columns(df)
             
             if container_col:
-                # --- Global Rack & Cell Configuration ---
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Global Rack Configuration")
                 
@@ -306,7 +347,6 @@ def main():
                 num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=10, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
                 
-                # --- Bin Dimensions Configuration ---
                 unique_containers = get_unique_containers(df, container_col)
                 bin_dimensions_map = {}
                 st.sidebar.markdown("---")
@@ -319,14 +359,11 @@ def main():
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     try:
-                        # Build the rack_configs dictionary based on global settings
                         rack_configs = {}
                         for i in range(num_racks):
                             rack_name = f"Rack {i+1:02d}"
                             rack_configs[rack_name] = {
-                                'cell_dimensions': cell_dim,
-                                'levels': levels,
-                                'cells_per_level': num_cells_per_level
+                                'cell_dimensions': cell_dim, 'levels': levels, 'cells_per_level': num_cells_per_level
                             }
 
                         df_processed = automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text)
