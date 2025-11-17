@@ -75,12 +75,11 @@ def get_unique_containers(df, container_col):
 def parse_dimensions(dim_str):
     if not isinstance(dim_str, str) or not dim_str:
         return 0, 0
-    # Use regex to find all numbers, expecting two (width, length)
     nums = [int(n) for n in re.findall(r'\d+', dim_str)]
     if len(nums) >= 2:
-        return nums[0], nums[1] # Return as Width, Depth
+        return nums[0], nums[1]
     elif len(nums) == 1:
-        return nums[0], nums[0] # Assume square if only one dimension
+        return nums[0], nums[0]
     return 0, 0
 
 def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_map, status_text=None):
@@ -96,7 +95,6 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
     }
     df_processed.rename(columns={k: v for k, v in rename_dict.items() if k}, inplace=True)
     
-    # Calculate bin area for sorting (placing largest first)
     df_processed['bin_width'], df_processed['bin_depth'] = zip(*df_processed['Container'].map(lambda c: parse_dimensions(bin_dimensions_map.get(c, ''))))
     df_processed['bin_area'] = df_processed['bin_width'] * df_processed['bin_depth']
     df_processed.sort_values(by=['Station No', 'bin_area'], ascending=[True, False], inplace=True)
@@ -134,17 +132,14 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
                 unassigned_parts.append(part)
                 continue
 
-            # Attempt to place the part in an available cell
             for cell in available_cells:
-                # Check if bin depth fits and there's enough width left
-                # This is a simplified 1D packing along the width
                 if bin_d <= cell['cell_depth'] and (cell['occupied_width'] + bin_w) <= cell['cell_width']:
                     part.update(cell['location'])
                     final_df_parts.append(part)
                     cell['occupied_width'] += bin_w
                     cell['parts'].append(part['Part No'])
                     part_placed = True
-                    break # Move to the next part
+                    break
             
             if not part_placed:
                 unassigned_parts.append(part)
@@ -152,7 +147,6 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_dimensions_
         if unassigned_parts:
             st.warning(f"⚠️ For station {station_no}, could not assign locations for {len(unassigned_parts)} parts due to insufficient capacity or invalid dimensions.")
 
-        # Create 'EMPTY' records for completely unused cells
         for cell in available_cells:
             if not cell['parts']:
                 empty_part = {'Part No': 'EMPTY', 'Description': '', 'Bus Model': '', 'Station No': station_no, 'Container': ''}
@@ -171,7 +165,7 @@ def create_location_key(row):
 def extract_location_values(row):
     return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
-# --- PDF Generation Functions (Unchanged as per request) ---
+# --- PDF Generation Functions (Unchanged) ---
 def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
@@ -281,7 +275,7 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI ---
+# --- Main Application UI (Updated) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
@@ -319,28 +313,22 @@ def main():
                 for i in range(num_racks):
                     rack_name = f"Rack {i+1:02d}"
                     with st.sidebar.expander(f"Settings for {rack_name}", expanded=i==0):
-                        rack_dim = st.text_input(f"Overall Dimensions for {rack_name}", key=f"dim_{rack_name}", placeholder="e.g., 1200x1000x2000mm")
                         cell_dim = st.text_input(f"Cell Dimensions for {rack_name}", key=f"celldim_{rack_name}", placeholder="e.g., 800x400")
-                        
-                        levels = st.multiselect(f"Levels for {rack_name}", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'], key=f"lvl_{rack_name}")
+                        levels = st.multiselect(f"Active Levels in {rack_name}", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'], key=f"lvl_{rack_name}")
                         
                         cells_per_level = {}
                         if levels:
-                            st.markdown("---")
-                            st.write("**Set Number of Cells per Level**")
-
-                        for level in levels:
-                            capacity = st.number_input(
-                                f"Number of Cells for Level {level}", 
+                            num_cells = st.number_input(
+                                f"Number of Cells per Level in {rack_name}", 
                                 min_value=0, 
                                 value=2, 
                                 step=1, 
-                                key=f"cap_{rack_name}_{level}"
+                                key=f"numcells_{rack_name}"
                             )
-                            cells_per_level[level] = capacity
+                            for level in levels:
+                                cells_per_level[level] = num_cells
                         
                         rack_configs[rack_name] = {
-                            'dimensions': rack_dim, 
                             'cell_dimensions': cell_dim,
                             'levels': levels, 
                             'cells_per_level': cells_per_level
