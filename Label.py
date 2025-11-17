@@ -55,7 +55,7 @@ def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
     return Paragraph(desc, desc_style)
 
-# --- Core Logic Functions (Unchanged) ---
+# --- Core Logic Functions ---
 def find_required_columns(df):
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
@@ -76,6 +76,7 @@ def parse_dimensions(dim_str):
     return (nums[0], nums[1]) if len(nums) >= 2 else (0, 0)
 
 def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text=None):
+    # This function remains the same, as its logic for physical placement is correct.
     part_no_col, desc_col, model_col, station_col, container_col = find_required_columns(df)
     if not all([part_no_col, container_col, station_col]):
         st.error("❌ 'Part Number', 'Container Type', or 'Station No' column not found.")
@@ -151,81 +152,57 @@ def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, s
 
     return pd.DataFrame(final_df_parts) if final_df_parts else pd.DataFrame()
 
-def create_location_key(row):
-    return '_'.join([str(row.get(c, '')) for c in ['Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']])
+def assign_sequential_location_ids(df):
+    """
+    NEW FUNCTION: Takes the physically assigned data and gives each part a
+    unique sequential ID that resets for each level.
+    """
+    df_sorted = df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']).copy()
+    
+    # Filter out empty parts to only give IDs to real items
+    df_parts_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
+    
+    # This dictionary will hold the running count for each level, e.g., {'A': 1, 'B': 1}
+    level_counters = {}
+    
+    sequential_ids = []
+    for index, row in df_parts_only.iterrows():
+        level = row['Level']
+        
+        # If we see a new level for the first time, start its counter at 1
+        if level not in level_counters:
+            level_counters[level] = 1
+        
+        # Get the current counter and create the ID
+        current_id_num = level_counters[level]
+        sequential_ids.append(f"{level}{current_id_num}")
+        
+        # Increment the counter for the next part on this level
+        level_counters[level] += 1
+        
+    df_parts_only['Sequential_ID'] = sequential_ids
+    
+    # Add the empty parts back in, they won't have a sequential ID
+    df_empty_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() == 'EMPTY'].copy()
+    
+    return pd.concat([df_parts_only, df_empty_only], ignore_index=True)
+
 
 def extract_location_values(row):
-    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
+    """MODIFIED: This now extracts the new sequential ID for the label."""
+    # Use the new Sequential_ID if it exists, otherwise use the old Cell number (for EMPTY labels)
+    cell_value = row.get('Sequential_ID', row.get('Cell', ''))
+    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level']] + [str(cell_value)]
 
-# --- PDF Generation Functions (Corrected and Rewritten) ---
-def generate_labels_from_excel_v1(df, progress_bar=None, status_text=None):
-    """Generates a PDF with one label for every single part record."""
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
-    elements = []
-    
-    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True)
-    
-    # Filter out empty parts before generating labels
-    df_parts_only = df[df['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
-    
-    total_labels = len(df_parts_only)
-    label_count = 0
-    label_summary = {}
 
-    for i, part in enumerate(df_parts_only.to_dict('records')):
-        if progress_bar: progress_bar.progress(int((i / total_labels) * 100))
-        if status_text: status_text.text(f"Processing Label {i+1}/{total_labels}")
-
-        rack_num = f"{part.get('Rack No 1st', '0')}{part.get('Rack No 2nd', '0')}"
-        rack_key = f"Rack {rack_num.zfill(2)}"
-        label_summary[rack_key] = label_summary.get(rack_key, 0) + 1
-
-        if label_count > 0 and label_count % 4 == 0:
-            elements.append(PageBreak())
-        
-        # This format now creates a single label per part
-        part_table = Table([['Part No', format_part_no_v1(str(part['Part No']))], ['Description', format_description_v1(str(part['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
-        
-        location_values = extract_location_values(part)
-        location_data = [['Line Location'] + location_values]
-        col_proportions = [1.8, 2.7, 1.3, 1.3, 1.3, 1.3, 1.3]
-        location_widths = [4 * cm] + [w * (11 * cm) / sum(col_proportions) for w in col_proportions]
-        location_table = Table(location_data, colWidths=location_widths, rowHeights=0.8*cm)
-        
-        part_style = TableStyle([('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (0, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, -1), 16)])
-        part_table.setStyle(part_style)
-        
-        location_colors = [colors.HexColor('#E9967A'), colors.HexColor('#ADD8E6'), colors.HexColor('#90EE90'), colors.HexColor('#FFD700'), colors.HexColor('#ADD8E6'), colors.HexColor('#E9967A'), colors.HexColor('#90EE90')]
-        location_style = [('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, 0), 16), ('FONTSIZE', (1, 0), (-1, -1), 14)]
-        for j, color in enumerate(location_colors): location_style.append(('BACKGROUND', (j+1, 0), (j+1, 0), color))
-        location_table.setStyle(TableStyle(location_style))
-        
-        # Add a spacer between the two tables for the V1 look
-        elements.append(part_table)
-        elements.append(Spacer(1, 0.3 * cm))
-        # A dummy table to maintain spacing from original V1 format
-        dummy_table = Table([['', '']], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
-        dummy_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE')])) # Invisible
-        elements.append(dummy_table) 
-        elements.append(Spacer(1, 0.3 * cm))
-        elements.append(location_table)
-        elements.append(Spacer(1, 0.2 * cm))
-        label_count += 1
-        
-    if elements: doc.build(elements)
-    buffer.seek(0)
-    return buffer, label_summary
-
+# --- PDF Generation Functions (Modified to remove grouping) ---
 def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
-    """Generates a PDF with one label for every single part record."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
     elements = []
     
-    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True)
+    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Sequential_ID'], inplace=True, na_position='last')
     
-    # Filter out empty parts before generating labels
     df_parts_only = df[df['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
 
     total_labels = len(df_parts_only)
@@ -268,14 +245,13 @@ def generate_labels_from_excel_v2(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI (Unchanged) ---
+# --- Main Application UI ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.sidebar.title("📄 Label Options")
-    label_type = st.sidebar.selectbox("Choose Label Format:", ["Single Part", "Multiple Parts"])
     base_rack_id = st.sidebar.text_input("Enter Storage Line Side Infrastructure", "R")
     
     uploaded_file = st.file_uploader("Choose an Excel or CSV file", type=['xlsx', 'xls', 'csv'])
@@ -291,9 +267,9 @@ def main():
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Global Rack Configuration")
                 
-                cell_dim_input = st.sidebar.text_input("Cell Dimensions (for all racks)", placeholder="e.g., 800x400")
+                cell_dim_input = st.sidebar.text_input("Cell Dimensions (for sorting)", placeholder="e.g., 800x400")
                 levels = st.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
-                num_cells_per_level = st.sidebar.number_input("Number of Cells per Level", min_value=1, value=2, step=1)
+                num_cells_per_level = st.sidebar.number_input("Number of Physical Cells per Level", min_value=1, value=10, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
                 
                 unique_containers = get_unique_containers(df, container_col)
@@ -303,7 +279,7 @@ def main():
                 for container in unique_containers:
                     st.sidebar.markdown(f"**Settings for {container}**")
                     dim = st.sidebar.text_input(f"Dimensions", key=f"bindim_{container}", placeholder="e.g., 600x400")
-                    capacity = st.sidebar.number_input("Bins per Cell (Capacity)", min_value=0, value=1, step=1, key=f"bincap_{container}")
+                    capacity = st.sidebar.number_input("Parts per Physical Cell (Capacity)", min_value=0, value=1, step=1, key=f"bincap_{container}")
                     bin_info_map[container] = {'dims': parse_dimensions(dim), 'capacity': capacity}
 
                 if st.button("🚀 Generate PDF Labels", type="primary"):
@@ -317,18 +293,19 @@ def main():
                                 'cell_dimensions': cell_dim_input, 'levels': levels, 'cells_per_level': num_cells_per_level
                             }
 
-                        df_processed = automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text)
+                        # Step 1: Assign parts to physical cells
+                        df_physically_assigned = automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text)
                         
-                        if df_processed is not None and not df_processed.empty:
-                            # Both functions now produce one label per part, v2 is cleaner
-                            gen_func = generate_labels_from_excel_v2
-                            
-                            pdf_buffer, label_summary = gen_func(df_processed, progress_bar, status_text)
+                        # Step 2: Give each part its own sequential location ID
+                        df_final_labels = assign_sequential_location_ids(df_physically_assigned)
+                        
+                        if df_final_labels is not None and not df_final_labels.empty:
+                            pdf_buffer, label_summary = generate_labels_from_excel_v2(df_final_labels, progress_bar, status_text)
                             
                             if pdf_buffer:
                                 total_labels_generated = sum(label_summary.values())
                                 status_text.text(f"✅ PDF with {total_labels_generated} labels generated successfully!")
-                                file_name = f"{os.path.splitext(uploaded_file.name)[0]}_{label_type.lower().replace(' ','_')}_labels.pdf"
+                                file_name = f"{os.path.splitext(uploaded_file.name)[0]}_labels.pdf"
                                 st.download_button(label="📥 Download PDF", data=pdf_buffer.getvalue(), file_name=file_name, mime="application/pdf")
 
                                 if total_labels_generated > 0:
