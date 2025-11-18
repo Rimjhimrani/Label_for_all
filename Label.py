@@ -8,7 +8,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Spacer, Paragraph, PageBreak
 from reportlab.lib.units import cm
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.lib.enums import TA_LEFT
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -17,115 +17,79 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Style Definitions for PDF Labels ---
-
-# Styles for Single-Part Labels (Packing Factor = 1)
-single_part_style = ParagraphStyle(
-    name='Single_Part_Style',
+# --- Style Definitions (MODIFIED) ---
+bold_style_v1 = ParagraphStyle(
+    name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=10, spaceBefore=2, spaceAfter=2
+)
+# --- CHANGE: Added wordWrap and increased leading to handle long Part Numbers ---
+bold_style_v2 = ParagraphStyle(
+    name='Bold_v2',
     fontName='Helvetica-Bold',
     fontSize=10,
     alignment=TA_LEFT,
-    leading=32,
+    leading=32,  # Increased line spacing for wrapped text
     spaceBefore=0,
     spaceAfter=2,
-    wordWrap='CJK'
+    wordWrap='CJK'  # Force text to wrap even without spaces
 )
-single_desc_style = ParagraphStyle(
-    name='Single_Desc_Style',
-    fontName='Helvetica',
-    fontSize=20,
-    alignment=TA_LEFT,
-    leading=16,
-    spaceBefore=2,
-    spaceAfter=2
+desc_style = ParagraphStyle(
+    name='Description', fontName='Helvetica', fontSize=20, alignment=TA_LEFT, leading=16, spaceBefore=2, spaceAfter=2
 )
 
-# Styles for Multi-Part Labels (Packing Factor = 0.5)
-multi_part_style = ParagraphStyle(
-    name='Multi_Part_Style',
-    fontName='Helvetica-Bold',
-    fontSize=10,
-    alignment=TA_LEFT,
-    leading=20,
-    spaceBefore=2,
-    spaceAfter=2
-)
-
-# --- Formatting Functions ---
-
-def format_single_part_no(part_no):
-    """Formats a part number for a large, single-part label."""
+# --- Formatting Functions (Unchanged) ---
+def format_part_no_v2(part_no):
     if not part_no or not isinstance(part_no, str): part_no = str(part_no)
     if part_no.upper() == 'EMPTY':
-        return Paragraph("<b><font size=34>EMPTY</font></b>", single_part_style)
+         return Paragraph(f"<b><font size=34>EMPTY</font></b>", bold_style_v2)
     if len(part_no) > 5:
         part1, part2 = part_no[:-5], part_no[-5:]
-        return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b>", single_part_style)
-    return Paragraph(f"<b><font size=34>{part_no}</font></b>", single_part_style)
+        return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b>", bold_style_v2)
+    return Paragraph(f"<b><font size=34>{part_no}</font></b>", bold_style_v2)
 
-def format_single_description(desc):
-    """Formats a description for a large, single-part label."""
+def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
-    return Paragraph(desc, single_desc_style)
+    return Paragraph(desc, desc_style)
 
-def format_multi_part_no(part_no):
-    """Formats a part number for a smaller, multi-part label."""
-    if not part_no or not isinstance(part_no, str): part_no = str(part_no)
-    if len(part_no) > 5:
-        part1, part2 = part_no[:-5], part_no[-5:]
-        return Paragraph(f"<b><font size=17>{part1}</font><font size=22>{part2}</font></b>", multi_part_style)
-    return Paragraph(f"<b><font size=17>{part_no}</font></b>", multi_part_style)
-
-def format_multi_description(desc):
-    """Formats a description for a multi-part label with dynamic font sizing."""
-    if not desc or not isinstance(desc, str): desc = str(desc)
-    
-    font_size = 15 if len(desc) <= 30 else 13 if len(desc) <= 50 else 11 if len(desc) <= 70 else 9
-    desc = desc[:100] + "..." if len(desc) > 100 else desc
-
-    dynamic_style = ParagraphStyle(
-        name=f'Multi_Desc_Style_{font_size}', fontName='Helvetica', fontSize=font_size,
-        alignment=TA_LEFT, leading=font_size + 2, spaceBefore=1, spaceAfter=1
-    )
-    return Paragraph(desc, dynamic_style)
-
-# --- Core Logic Functions ---
-
+# --- Core Logic Functions (Unchanged) ---
 def find_required_columns(df):
-    """Finds essential columns in the dataframe, including Packing Factor."""
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
     desc_key = next((k for k in cols if 'DESC' in k), None)
     bus_model_key = next((k for k in cols if 'BUS' in k and 'MODEL' in k), None)
     station_no_key = next((k for k in cols if 'STATION' in k), None)
     container_type_key = next((k for k in cols if 'CONTAINER' in k), None)
-    # --- CHANGE: Added Packing Factor lookup ---
-    packing_factor_key = next((k for k in cols if 'PACKING' in k and 'FACTOR' in k), None)
-    
     return (cols.get(part_no_key), cols.get(desc_key), cols.get(bus_model_key),
-            cols.get(station_no_key), cols.get(container_type_key), cols.get(packing_factor_key))
+            cols.get(station_no_key), cols.get(container_type_key))
 
-def automate_location_assignment(df, base_rack_id, rack_configs, status_text=None):
-    """Assigns parts to physical rack locations based on Station, Container, and Packing Factor."""
-    part_no_col, desc_col, model_col, station_col, container_col, packing_col = find_required_columns(df)
-    if not all([part_no_col, container_col, station_col, packing_col]):
-        st.error("❌ Critical column not found. Ensure 'Part Number', 'Container Type', 'Station No', and 'Packing Factor' columns exist.")
+def get_unique_containers(df, container_col):
+    if not container_col or container_col not in df.columns: return []
+    return sorted(df[container_col].dropna().astype(str).unique())
+
+def parse_dimensions(dim_str):
+    if not isinstance(dim_str, str) or not dim_str: return 0, 0
+    nums = [int(n) for n in re.findall(r'\d+', dim_str)]
+    return (nums[0], nums[1]) if len(nums) >= 2 else (0, 0)
+
+def automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text=None):
+    part_no_col, desc_col, model_col, station_col, container_col = find_required_columns(df)
+    if not all([part_no_col, container_col, station_col]):
+        st.error("❌ 'Part Number', 'Container Type', or 'Station No' column not found.")
         return None
 
     df_processed = df.copy()
     rename_dict = {
-        part_no_col: 'Part No', desc_col: 'Description', model_col: 'Bus Model',
-        station_col: 'Station No', container_col: 'Container', packing_col: 'Packing Factor'
+        part_no_col: 'Part No', desc_col: 'Description',
+        model_col: 'Bus Model', station_col: 'Station No', container_col: 'Container'
     }
     df_processed.rename(columns={k: v for k, v in rename_dict.items() if k}, inplace=True)
-    df_processed['Packing Factor'] = pd.to_numeric(df_processed['Packing Factor'], errors='coerce')
-
-    # --- CHANGE: 'bins_per_cell' is now determined by Packing Factor ---
-    df_processed['bins_per_cell'] = df_processed['Packing Factor'].apply(lambda pf: 1 if pf == 1 else 2 if pf == 0.5 else 0)
+    
+    df_processed['bin_info'] = df_processed['Container'].map(bin_info_map)
+    df_processed['bin_area'] = df_processed['bin_info'].apply(lambda x: x['dims'][0] * x['dims'][1] if x and x.get('dims') else 0)
+    df_processed['bins_per_cell'] = df_processed['bin_info'].apply(lambda x: x['capacity'] if x else 0)
     
     final_df_parts = []
-    available_cells = []
     
+    available_cells = []
     for rack_name, config in sorted(rack_configs.items()):
         rack_num_val = ''.join(filter(str.isdigit, rack_name))
         rack_num_1st = rack_num_val[0] if len(rack_num_val) > 1 else '0'
@@ -143,18 +107,21 @@ def automate_location_assignment(df, base_rack_id, rack_configs, status_text=Non
         if status_text: status_text.text(f"Processing station: {station_no}...")
         last_processed_station = station_no
         
-        # --- CHANGE: Group also by Packing Factor to handle different capacities ---
-        parts_grouped = station_group.groupby(['Container', 'Packing Factor'])
-        
-        for (container_type, packing_factor), group_df in parts_grouped:
-            parts_to_assign = group_df.to_dict('records')
-            bins_per_cell = parts_to_assign[0]['bins_per_cell'] if parts_to_assign else 0
+        parts_grouped_by_container = station_group.groupby('Container')
+        sorted_groups = sorted(parts_grouped_by_container, key=lambda x: x[1]['bin_area'].iloc[0], reverse=True)
 
-            if bins_per_cell == 0: continue
+        for container_type, group_df in sorted_groups:
+            parts_to_assign = group_df.to_dict('records')
+            bins_per_cell = parts_to_assign[0]['bins_per_cell']
+
+            if bins_per_cell == 0:
+                st.warning(f"⚠️ Capacity for bin '{container_type}' is 0. Skipping {len(parts_to_assign)} parts.")
+                continue
 
             for i in range(0, len(parts_to_assign), bins_per_cell):
                 if current_cell_index >= len(available_cells):
-                    st.error(f"❌ Ran out of rack space at Station {station_no}.")
+                    unplaced_count = len(parts_to_assign) - i
+                    st.error(f"❌ Ran out of rack space. Could not place {unplaced_count} parts of type '{container_type}' for station {station_no}.")
                     break
                 
                 chunk = parts_to_assign[i:i + bins_per_cell]
@@ -166,7 +133,8 @@ def automate_location_assignment(df, base_rack_id, rack_configs, status_text=Non
                 
                 current_cell_index += 1
             
-            if current_cell_index >= len(available_cells): break
+            if current_cell_index >= len(available_cells):
+                break
         if current_cell_index >= len(available_cells):
             st.warning("⚠️ All available rack space has been filled.")
             break
@@ -178,87 +146,96 @@ def automate_location_assignment(df, base_rack_id, rack_configs, status_text=Non
 
     return pd.DataFrame(final_df_parts) if final_df_parts else pd.DataFrame()
 
+def assign_sequential_location_ids(df):
+    """
+    Gives each part a unique sequential ID that resets for each rack AND level.
+    The ID is just the number (e.g., 1, 2, 3).
+    """
+    df_sorted = df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Physical_Cell']).copy()
+    df_parts_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
+    
+    # Counter key will be a tuple: ((Rack1, Rack2), Level)
+    location_counters = {}
+    
+    sequential_ids = []
+    for index, row in df_parts_only.iterrows():
+        # Create a unique key for each rack/level combination
+        rack_id = (row['Rack No 1st'], row['Rack No 2nd'])
+        level = row['Level']
+        counter_key = (rack_id, level)
+        
+        if counter_key not in location_counters:
+            location_counters[counter_key] = 1
+        
+        current_id_num = location_counters[counter_key]
+        sequential_ids.append(current_id_num)
+        
+        location_counters[counter_key] += 1
+        
+    df_parts_only['Cell'] = sequential_ids
+    
+    df_empty_only = df_sorted[df_sorted['Part No'].astype(str).str.upper() == 'EMPTY'].copy()
+    # For empty parts, the 'Cell' will be the physical cell number
+    df_empty_only['Cell'] = df_empty_only['Physical_Cell']
+
+    return pd.concat([df_parts_only, df_empty_only], ignore_index=True)
+
+
 def extract_location_values(row):
-    """Extracts location values for the label."""
-    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Physical_Cell']]
+    """Extracts values for the label, using the final 'Cell' number."""
+    return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
-# --- PDF Generation Function ---
 
-def generate_combined_pdf(df, progress_bar=None, status_text=None):
-    """Generates a single PDF with labels for both single and multiple parts per location."""
+# --- PDF Generation Functions (Unchanged) ---
+def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
     elements = []
     
-    # Sort by physical location to ensure logical print order
-    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Physical_Cell'], inplace=True, na_position='last')
+    # Sort by the final location to ensure PDF prints in a logical order
+    df.sort_values(by=['Rack No 1st', 'Rack No 2nd', 'Level', 'Cell'], inplace=True, na_position='last')
     
     df_parts_only = df[df['Part No'].astype(str).str.upper() != 'EMPTY'].copy()
-    
-    # --- CHANGE: Group by physical location to handle single vs. multi-part labels ---
-    location_cols = ['Rack No 1st', 'Rack No 2nd', 'Level', 'Physical_Cell']
-    grouped_by_location = df_parts_only.groupby(location_cols)
-    
-    total_locations = len(grouped_by_location)
+
+    total_labels = len(df_parts_only)
     label_count = 0
     label_summary = {}
 
-    for i, (loc_key, group) in enumerate(grouped_by_location):
-        if progress_bar: progress_bar.progress(int((i / total_locations) * 100))
-        if status_text: status_text.text(f"Generating Label {i+1}/{total_locations}")
-        
-        rack_num = f"{group.iloc[0].get('Rack No 1st', '0')}{group.iloc[0].get('Rack No 2nd', '0')}"
+    for i, part in enumerate(df_parts_only.to_dict('records')):
+        if progress_bar: progress_bar.progress(int((i / total_labels) * 100))
+        if status_text: status_text.text(f"Processing Label {i+1}/{total_labels}")
+
+        rack_num = f"{part.get('Rack No 1st', '0')}{part.get('Rack No 2nd', '0')}"
         rack_key = f"Rack {rack_num.zfill(2)}"
         label_summary[rack_key] = label_summary.get(rack_key, 0) + 1
             
         if label_count > 0 and label_count % 4 == 0:
             elements.append(PageBreak())
 
-        # Common location values and table setup
-        location_values = extract_location_values(group.iloc[0])
-        location_headers = ['Bus Model', 'Station No', 'Rack', 'R1', 'R2', 'Level', 'Cell']
-        location_data = [location_headers, location_values] # Will use only values later
+        part_table = Table([['Part No', format_part_no_v2(str(part['Part No']))], ['Description', format_description(str(part['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.9*cm, 2.1*cm])
         
-        col_widths = [2.9, 1.3, 1.2, 1.3, 1.3, 1.3] # Proportions for location cells
-        location_widths = [4 * cm] + [w * (15 * cm - 4*cm) / sum(col_widths) for w in col_widths]
+        location_values = extract_location_values(part)
+        location_data = [['Line Location'] + location_values]
+        col_widths = [1.7, 2.9, 1.3, 1.2, 1.3, 1.3, 1.3]
+        location_widths = [4 * cm] + [w * (11 * cm) / sum(col_widths) for w in col_widths]
+        location_table = Table(location_data, colWidths=location_widths, rowHeights=1.2*cm)
         
-        location_table = Table([['Line Location'] + location_values], colWidths=location_widths, rowHeights=1.2 * cm)
+        part_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (0, -1), 16)
+        ]))
         
         location_colors = [colors.HexColor('#E9967A'), colors.HexColor('#ADD8E6'), colors.HexColor('#90EE90'), colors.HexColor('#FFD700'), colors.HexColor('#ADD8E6'), colors.HexColor('#E9967A'), colors.HexColor('#90EE90')]
-        location_style = [('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, 0), 16), ('FONTSIZE', (1, 0), (-1, -1), 16)]
+        location_style = [('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 0), (0, 0), 16), ('FONTSIZE', (1, 0), (-1, -1), 16)]
         for j, color in enumerate(location_colors): location_style.append(('BACKGROUND', (j+1, 0), (j+1, 0), color))
         location_table.setStyle(TableStyle(location_style))
         
-        # --- LOGIC FOR SINGLE vs MULTI PART ---
-        if len(group) == 1: # Single Part Label (Packing Factor 1)
-            part = group.iloc[0]
-            part_table = Table([['Part No', format_single_part_no(str(part['Part No']))], ['Description', format_single_description(str(part['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.9*cm, 2.1*cm])
-            part_table.setStyle(TableStyle([
-                ('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (0, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('LEFTPADDING', (1, 0), (-1, -1), 5),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, -1), 16)
-            ]))
-            elements.append(part_table)
-
-        elif len(group) >= 2: # Multi-Part Label (Packing Factor 0.5)
-            part1 = group.iloc[0]
-            part2 = group.iloc[1]
-            part_table1 = Table([['Part No', format_multi_part_no(str(part1['Part No']))], ['Description', format_multi_description(str(part1['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
-            part_table2 = Table([['Part No', format_multi_part_no(str(part2['Part No']))], ['Description', format_multi_description(str(part2['Description']))]], colWidths=[4*cm, 11*cm], rowHeights=[1.3*cm, 0.8*cm])
-            
-            style = TableStyle([
-                ('GRID', (0, 0), (-1, -1), 1, colors.black), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('ALIGN', (0, 0), (0, -1), 'CENTER'), ('LEFTPADDING', (1, 0), (-1, -1), 5),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, -1), 16)
-            ])
-            part_table1.setStyle(style)
-            part_table2.setStyle(style)
-
-            elements.append(part_table1)
-            elements.append(Spacer(1, 0.1 * cm))
-            elements.append(part_table2)
-
-        # Add shared location table and spacing
+        elements.append(part_table)
         elements.append(Spacer(1, 0.3 * cm))
         elements.append(location_table)
         elements.append(Spacer(1, 0.2 * cm))
@@ -268,63 +245,79 @@ def generate_combined_pdf(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI ---
+# --- Main Application UI (Unchanged) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.sidebar.title("📄 Label Options")
-    base_rack_id = st.sidebar.text_input("Storage Line Side ID", "R")
+    base_rack_id = st.sidebar.text_input("Enter Storage Line Side Infrastructure", "R")
     
-    uploaded_file = st.file_uploader("Choose an Excel or CSV file", type=['xlsx', 'xls', 'csv'], help="Your file must contain 'Part Number', 'Description', 'Station No', 'Container Type', and 'Packing Factor' columns.")
+    uploaded_file = st.file_uploader("Choose an Excel or CSV file", type=['xlsx', 'xls', 'csv'])
 
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             st.success(f"✅ File loaded! Found {len(df)} rows.")
             
-            _, _, _, _, _, packing_col = find_required_columns(df)
+            _, _, _, _, container_col = find_required_columns(df)
             
-            if packing_col:
+            if container_col:
                 st.sidebar.markdown("---")
                 st.sidebar.subheader("Global Rack Configuration")
                 
-                levels = st.sidebar.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
+                # Clarified the help text for the user
+                st.sidebar.text_input("Cell Dimensions (for sorting only)", placeholder="e.g., 800x400")
+                levels = st.multiselect("Active Levels (for all racks)", options=['A','B','C','D','E','F','G','H'], default=['A','B','C','D'])
                 num_cells_per_level = st.sidebar.number_input("Number of Physical Cells per Level", min_value=1, value=10, step=1)
                 num_racks = st.sidebar.number_input("Total Number of Racks", min_value=1, value=4, step=1)
                 
+                unique_containers = get_unique_containers(df, container_col)
+                bin_info_map = {}
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("Container (Bin) Rules")
+                for container in unique_containers:
+                    st.sidebar.markdown(f"**Settings for {container}**")
+                    dim = st.sidebar.text_input(f"Dimensions", key=f"bindim_{container}", placeholder="e.g., 600x400")
+                    capacity = st.sidebar.number_input("Parts per Physical Cell (Capacity)", min_value=0, value=1, step=1, key=f"bincap_{container}")
+                    bin_info_map[container] = {'dims': parse_dimensions(dim), 'capacity': capacity}
+
                 if st.button("🚀 Generate PDF Labels", type="primary"):
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     try:
-                        # --- CHANGE: Filter out Packing Factor 0.0625 ---
-                        df[packing_col] = pd.to_numeric(df[packing_col], errors='coerce')
-                        df_to_process = df[df[packing_col].isin([1, 0.5])].copy()
-                        ignored_count = len(df) - len(df_to_process)
-                        if ignored_count > 0:
-                            st.info(f"ℹ️ Ignored {ignored_count} rows where Packing Factor was not 1 or 0.5.")
+                        rack_configs = {}
+                        for i in range(num_racks):
+                            rack_name = f"Rack {i+1:02d}"
+                            rack_configs[rack_name] = {
+                                'levels': levels, 'cells_per_level': num_cells_per_level
+                            }
 
-                        rack_configs = {f"Rack {i+1:02d}": {'levels': levels, 'cells_per_level': num_cells_per_level} for i in range(num_racks)}
-
-                        df_assigned = automate_location_assignment(df_to_process, base_rack_id, rack_configs, status_text)
+                        # Step 1: Assign parts to physical cells
+                        df_physically_assigned = automate_location_assignment(df, base_rack_id, rack_configs, bin_info_map, status_text)
                         
-                        if df_assigned is not None and not df_assigned.empty:
-                            pdf_buffer, label_summary = generate_combined_pdf(df_assigned, progress_bar, status_text)
+                        # Step 2: Give each part its own final sequential label ID
+                        df_final_labels = assign_sequential_location_ids(df_physically_assigned)
+                        
+                        if df_final_labels is not None and not df_final_labels.empty:
+                            pdf_buffer, label_summary = generate_labels_from_excel(df_final_labels, progress_bar, status_text)
                             
                             if pdf_buffer:
-                                total_labels = sum(label_summary.values())
-                                status_text.text(f"✅ PDF with {total_labels} labels generated successfully!")
+                                total_labels_generated = sum(label_summary.values())
+                                status_text.text(f"✅ PDF with {total_labels_generated} labels generated successfully!")
                                 file_name = f"{os.path.splitext(uploaded_file.name)[0]}_labels.pdf"
                                 st.download_button(label="📥 Download PDF", data=pdf_buffer.getvalue(), file_name=file_name, mime="application/pdf")
 
-                                if total_labels > 0:
+                                if total_labels_generated > 0:
                                     st.markdown("---")
                                     st.subheader("📊 Generation Summary")
-                                    summary_df = pd.DataFrame(list(label_summary.items()), columns=['Rack', 'Labels Generated'])
-                                    st.table(summary_df.sort_values(by='Rack').reset_index(drop=True))
+                                    st.markdown(f"A total of **{total_labels_generated}** labels have been generated. Here is the breakdown by rack:")
+                                    summary_df = pd.DataFrame(list(label_summary.items()), columns=['Rack', 'Number of Labels'])
+                                    summary_df = summary_df.sort_values(by='Rack').reset_index(drop=True)
+                                    st.table(summary_df)
                         else:
-                            st.error("❌ No data was processed. Check your input file and configurations.")
+                            st.error("❌ No data was processed. Check your input file and rack configurations.")
                     except Exception as e:
                         st.error(f"❌ An unexpected error occurred: {e}")
                         st.exception(e)
@@ -332,7 +325,7 @@ def main():
                         progress_bar.empty()
                         status_text.empty()
             else:
-                st.error("❌ A 'Packing Factor' column could not be found in the uploaded file. This column is required for automation.")
+                st.error("Could not find a 'Container Type' column in the file.")
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
     else:
