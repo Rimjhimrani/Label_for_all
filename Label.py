@@ -19,7 +19,7 @@ st.set_page_config(
 
 # --- Style Definitions (MODIFIED) ---
 bold_style_v1 = ParagraphStyle(
-    name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=14, spaceBefore=2, spaceAfter=2
+    name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=10, spaceBefore=2, spaceAfter=2
 )
 # --- CHANGE: Added wordWrap and increased leading to handle long Part Numbers ---
 bold_style_v2 = ParagraphStyle(
