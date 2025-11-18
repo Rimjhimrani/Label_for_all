@@ -42,7 +42,7 @@ def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
     return Paragraph(desc, desc_style)
 
-# --- Core Logic Functions ---
+# --- Core Logic Functions (Unchanged) ---
 def find_required_columns(df):
     cols = {col.upper().strip(): col for col in df.columns}
     part_no_key = next((k for k in cols if 'PART' in k and ('NO' in k or 'NUM' in k)), None)
@@ -178,7 +178,7 @@ def extract_location_values(row):
     return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
 
-# --- PDF Generation Functions ---
+# --- PDF Generation Functions (MODIFIED) ---
 def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
@@ -210,9 +210,23 @@ def generate_labels_from_excel(df, progress_bar=None, status_text=None):
         location_data = [['Line Location'] + location_values]
         col_widths = [1.7, 2.9, 1.3, 1.2, 1.3, 1.3, 1.3]
         location_widths = [4 * cm] + [w * (11 * cm) / sum(col_widths) for w in col_widths]
-        location_table = Table(location_data, colWidths=location_widths, rowHeights=0.9*cm)
         
-        part_table.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (0, -1), 'CENTER'), ('ALIGN', (1, 1), (1, -1), 'LEFT'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('LEFTPADDING', (0, 0), (-1, -1), 5), ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (0, -1), 16)]))
+        # --- CHANGE 1: Increased row height for Line Location table ---
+        # Increased from 0.9*cm to 1.2*cm for more vertical space
+        location_table = Table(location_data, colWidths=location_widths, rowHeights=1.2*cm)
+        
+        # --- CHANGE 2: Added TOPPADDING to the Part No cell style ---
+        part_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (0, -1), 16),
+            # This new line adds space above the Part No value
+            ('TOPPADDING', (1, 0), (1, 0), 6)
+        ]))
         
         location_colors = [colors.HexColor('#E9967A'), colors.HexColor('#ADD8E6'), colors.HexColor('#90EE90'), colors.HexColor('#FFD700'), colors.HexColor('#ADD8E6'), colors.HexColor('#E9967A'), colors.HexColor('#90EE90')]
         location_style = [('GRID', (0, 0), (-1, -1), 1, colors.black), ('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 0), (0, 0), 16), ('FONTSIZE', (1, 0), (-1, -1), 16)]
@@ -229,7 +243,7 @@ def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer.seek(0)
     return buffer, label_summary
 
-# --- Main Application UI ---
+# --- Main Application UI (Unchanged) ---
 def main():
     st.title("🏷️ Rack Label Generator")
     st.markdown("<p style='font-style:italic;'>Designed by Agilomatrix</p>", unsafe_allow_html=True)
