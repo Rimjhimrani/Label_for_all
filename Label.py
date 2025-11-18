@@ -17,29 +17,33 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Style Definitions ---
+# --- Style Definitions (MODIFIED) ---
 bold_style_v1 = ParagraphStyle(
     name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=14, spaceBefore=2, spaceAfter=2
 )
-# --- CHANGE 2: Reduced spaceAfter for better alignment control within the table ---
+# --- CHANGE: Added wordWrap and increased leading to handle long Part Numbers ---
 bold_style_v2 = ParagraphStyle(
-    name='Bold_v2', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=12, spaceBefore=0, spaceAfter=2,
+    name='Bold_v2',
+    fontName='Helvetica-Bold',
+    fontSize=10,
+    alignment=TA_LEFT,
+    leading=32,  # Increased line spacing for wrapped text
+    spaceBefore=0,
+    spaceAfter=2,
+    wordWrap='CJK'  # Force text to wrap even without spaces
 )
 desc_style = ParagraphStyle(
     name='Description', fontName='Helvetica', fontSize=20, alignment=TA_LEFT, leading=16, spaceBefore=2, spaceAfter=2
 )
 
-# --- Formatting Functions (MODIFIED) ---
+# --- Formatting Functions (Unchanged) ---
 def format_part_no_v2(part_no):
     if not part_no or not isinstance(part_no, str): part_no = str(part_no)
     if part_no.upper() == 'EMPTY':
-         # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
          return Paragraph(f"<b><font size=34>EMPTY</font></b>", bold_style_v2)
     if len(part_no) > 5:
         part1, part2 = part_no[:-5], part_no[-5:]
-        # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
         return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b>", bold_style_v2)
-    # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
     return Paragraph(f"<b><font size=34>{part_no}</font></b>", bold_style_v2)
 
 def format_description(desc):
@@ -182,7 +186,7 @@ def extract_location_values(row):
     return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
 
-# --- PDF Generation Functions ---
+# --- PDF Generation Functions (Unchanged) ---
 def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
@@ -216,12 +220,11 @@ def generate_labels_from_excel(df, progress_bar=None, status_text=None):
         location_widths = [4 * cm] + [w * (11 * cm) / sum(col_widths) for w in col_widths]
         location_table = Table(location_data, colWidths=location_widths, rowHeights=1.2*cm)
         
-        # --- CHANGE 3: Reverted part_table style to rely on VALIGN: MIDDLE ---
         part_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
             ('ALIGN', (0, 0), (0, -1), 'CENTER'),
             ('ALIGN', (1, 1), (1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), # This now works correctly
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('LEFTPADDING', (0, 0), (-1, -1), 5),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (0, -1), 16)
