@@ -17,26 +17,30 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Style Definitions (Unchanged) ---
+# --- Style Definitions ---
 bold_style_v1 = ParagraphStyle(
-    name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=40, spaceBefore=2, spaceAfter=2
+    name='Bold_v1', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=14, spaceBefore=2, spaceAfter=2
 )
+# --- CHANGE 2: Reduced spaceAfter for better alignment control within the table ---
 bold_style_v2 = ParagraphStyle(
-    name='Bold_v2', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=12, spaceBefore=0, spaceAfter=15,
+    name='Bold_v2', fontName='Helvetica-Bold', fontSize=10, alignment=TA_LEFT, leading=12, spaceBefore=0, spaceAfter=2,
 )
 desc_style = ParagraphStyle(
     name='Description', fontName='Helvetica', fontSize=20, alignment=TA_LEFT, leading=16, spaceBefore=2, spaceAfter=2
 )
 
-# --- Formatting Functions (Unchanged) ---
+# --- Formatting Functions (MODIFIED) ---
 def format_part_no_v2(part_no):
     if not part_no or not isinstance(part_no, str): part_no = str(part_no)
     if part_no.upper() == 'EMPTY':
-         return Paragraph(f"<b><font size=34>EMPTY</font></b><br/><br/>", bold_style_v2)
+         # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
+         return Paragraph(f"<b><font size=34>EMPTY</font></b>", bold_style_v2)
     if len(part_no) > 5:
         part1, part2 = part_no[:-5], part_no[-5:]
-        return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b><br/><br/>", bold_style_v2)
-    return Paragraph(f"<b><font size=34>{part_no}</font></b><br/><br/>", bold_style_v2)
+        # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
+        return Paragraph(f"<b><font size=34>{part1}</font><font size=40>{part2}</font></b>", bold_style_v2)
+    # --- CHANGE 1: Removed trailing <br/><br/> to fix vertical alignment ---
+    return Paragraph(f"<b><font size=34>{part_no}</font></b>", bold_style_v2)
 
 def format_description(desc):
     if not desc or not isinstance(desc, str): desc = str(desc)
@@ -178,7 +182,7 @@ def extract_location_values(row):
     return [str(row.get(c, '')) for c in ['Bus Model', 'Station No', 'Rack', 'Rack No 1st', 'Rack No 2nd', 'Level', 'Cell']]
 
 
-# --- PDF Generation Functions (MODIFIED) ---
+# --- PDF Generation Functions ---
 def generate_labels_from_excel(df, progress_bar=None, status_text=None):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1*cm, bottomMargin=1*cm, leftMargin=1.5*cm, rightMargin=1.5*cm)
@@ -210,22 +214,17 @@ def generate_labels_from_excel(df, progress_bar=None, status_text=None):
         location_data = [['Line Location'] + location_values]
         col_widths = [1.7, 2.9, 1.3, 1.2, 1.3, 1.3, 1.3]
         location_widths = [4 * cm] + [w * (11 * cm) / sum(col_widths) for w in col_widths]
-        
-        # --- CHANGE 1: Increased row height for Line Location table ---
-        # Increased from 0.9*cm to 1.2*cm for more vertical space
         location_table = Table(location_data, colWidths=location_widths, rowHeights=1.2*cm)
         
-        # --- CHANGE 2: Added TOPPADDING to the Part No cell style ---
+        # --- CHANGE 3: Reverted part_table style to rely on VALIGN: MIDDLE ---
         part_table.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
             ('ALIGN', (0, 0), (0, -1), 'CENTER'),
             ('ALIGN', (1, 1), (1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), # This now works correctly
             ('LEFTPADDING', (0, 0), (-1, -1), 5),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (0, -1), 16),
-            # This new line adds space above the Part No value
-            ('TOPPADDING', (1, 0), (1, 0), 6)
+            ('FONTSIZE', (0, 0), (0, -1), 16)
         ]))
         
         location_colors = [colors.HexColor('#E9967A'), colors.HexColor('#ADD8E6'), colors.HexColor('#90EE90'), colors.HexColor('#FFD700'), colors.HexColor('#ADD8E6'), colors.HexColor('#E9967A'), colors.HexColor('#90EE90')]
