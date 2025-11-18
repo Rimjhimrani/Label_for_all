@@ -226,7 +226,7 @@ def generate_labels_from_excel(df, progress_bar=None, status_text=None):
             ('ALIGN', (1, 1), (1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('LEFTPADDING', (0, 0), (-1, -1), 5),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (0, -1), 16)
         ]))
         
